@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const debug = @import("debug.zig");
 const uart = @import("uart.zig");
 const gdt = @import("arch/x86_64/gdt.zig");
+const idt = @import("arch/x86_64/idt.zig");
 
 const log = std.log.scoped(.core);
 
@@ -34,4 +35,5 @@ pub fn init() !void {
     uart.init(uart.Speed.fromBaudrate(9600).?);
 
     gdt.init();
+    idt.init();
 }
