@@ -16,6 +16,58 @@ pub inline fn sti() void {
     asm volatile ("sti");
 }
 
+pub inline fn inb(port: u16) u8 {
+    return asm volatile ("inb %[port], %[result]"
+        : [result] "={al}" (-> u8),
+        : [port] "N{dx}" (port),
+    );
+}
+
+pub inline fn inw(port: u16) u16 {
+    return asm volatile ("inw %[port], %[result]"
+        : [result] "={ax}" (-> u16),
+        : [port] "N{dx}" (port),
+    );
+}
+
+pub inline fn inl(port: u16) u32 {
+    return asm volatile ("inl %[port], %[result]"
+        : [result] "={eax}" (-> u32),
+        : [port] "N{dx}" (port),
+    );
+}
+
+pub inline fn outb(port: u16, data: u8) void {
+    asm volatile ("outb %[data], %[port]"
+        :
+        : [data] "{al}" (data),
+          [port] "N{dx}" (port),
+    );
+}
+
+pub inline fn outw(port: u16, data: u16) void {
+    asm volatile ("outw %[data], %[port]"
+        :
+        : [data] "{ax}" (data),
+          [port] "N{dx}" (port),
+    );
+}
+
+pub inline fn outl(port: u16, data: u32) void {
+    asm volatile ("outl %[data], %[port]"
+        :
+        : [data] "{eax}" (data),
+          [port] "N{dx}" (port),
+    );
+}
+
+// pub inline fn lidt(idtd: *const int.Idtd) void {
+//     asm volatile ("lidt (%%rax)"
+//         :
+//         : [idtd] "{rax}" (idtd),
+//     );
+// }
+
 pub inline fn lgdt(gdtd: *const gdt.Gdtd) void {
     asm volatile ("lgdt (%%rax)"
         :
@@ -30,50 +82,90 @@ pub inline fn ltr(selector: u16) void {
     );
 }
 
-pub inline fn inb(port: u16) u8 {
-    return asm volatile ("inb %[port], %[result]"
-        : [result] "={al}" (-> u8),
-        : [port] "{dx}" (port),
-    );
-}
-
-pub inline fn inw(port: u16) u16 {
-    return asm volatile ("inw %[port], %[result]"
-        : [result] "={ax}" (-> u16),
-        : [port] "{dx}" (port),
-    );
-}
-
-pub inline fn inl(port: u16) u32 {
-    return asm volatile ("inl %[port], %[result]"
-        : [result] "={eax}" (-> u32),
-        : [port] "{dx}" (port),
-    );
-}
-
-pub inline fn outb(port: u16, data: u8) void {
-    asm volatile ("outb %[data], %[port]"
+pub inline fn invlpg(addr: usize) void {
+    asm volatile ("invlpg (%[addr])"
         :
-        : [data] "{al}" (data),
-          [port] "{dx}" (port),
+        : [addr] "r" (addr),
+        : "memory"
     );
 }
 
-pub inline fn outw(port: u16, data: u16) void {
-    asm volatile ("outw %[data], %[port]"
-        :
-        : [data] "{ax}" (data),
-          [port] "{dx}" (port),
+pub inline fn getLowEflags() u16 {
+    return @truncate(asm volatile (
+        \\pushf
+        \\pop %[res]
+        : [res] "=r" (-> usize),
+    ));
+}
+
+pub inline fn getEflags() u32 {
+    return @truncate(asm volatile (
+        \\pushfd
+        \\pop %[res]
+        : [res] "=r" (-> usize),
+    ));
+}
+
+pub inline fn getRflags() u64 {
+    return asm volatile (
+        \\pushfq
+        \\pop %[res]
+        : [res] "=r" (-> usize),
     );
 }
 
-pub inline fn outl(port: u16, data: u32) void {
-    asm volatile ("outl %[data], %[port]"
-        :
-        : [data] "{eax}" (data),
-          [port] "{dx}" (port),
+pub const CpuidResult = struct {
+    rax: u64,
+    rbx: u64,
+    rcx: u64,
+    rdx: u64,
+};
+
+pub inline fn cpuid(rax_in: u64) CpuidResult {
+    var rax_out: u64 = undefined;
+    var rbx_out: u64 = undefined;
+    var rcx_out: u64 = undefined;
+    var rdx_out: u64 = undefined;
+
+    asm volatile ("cpuid"
+        : [rax_out] "=%[rax]" (rax_out),
+          [rbx_out] "=%[rbx]" (rbx_out),
+          [rcx_out] "=%[rcx]" (rcx_out),
+          [rdx_out] "=%[rdx]" (rdx_out),
+        : [rax_in] "{rax}" (rax_in),
     );
+
+    return .{
+        .rax = rax_out,
+        .rbx = rbx_out,
+        .rcx = rcx_out,
+        .rdx = rdx_out,
+    };
 }
+
+pub const Cr2 = struct {
+    pub inline fn read() usize {
+        return asm volatile ("mov %cr2, %[res]"
+            : [res] "=r" (-> usize),
+        );
+    }
+};
+
+pub const Cr3 = struct {
+    pub inline fn write(value: usize) void {
+        asm volatile ("mov %[value], %cr3"
+            :
+            : [value] "r" (value),
+            : "memory"
+        );
+    }
+
+    pub inline fn read() usize {
+        return asm volatile ("mov %cr3, %[res]"
+            : [res] "=r" (-> usize),
+        );
+    }
+};
 
 pub const Msr = struct {
     pub const Register = enum(u32) {
@@ -111,4 +203,37 @@ pub const Msr = struct {
 
         return (@as(usize, value_high) << 32) | value_low;
     }
+};
+
+pub const ContextFrame = packed struct {
+    es: u64,
+    ds: u64,
+    r15: u64,
+    r14: u64,
+    r13: u64,
+    r12: u64,
+    r11: u64,
+    r10: u64,
+    r9: u64,
+    r8: u64,
+    rdi: u64,
+    rsi: u64,
+    rbp: u64,
+    rdx: u64,
+    rcx: u64,
+    rbx: u64,
+    rax: u64,
+    int_num: u64,
+    err: u64,
+    rip: u64,
+    cs: u64,
+    eflags: u64,
+    rsp: u64,
+    ss: u64,
+};
+
+pub const CoreInfo = packed struct {
+    kernel_stack: u64,
+    user_stack: u64,
+    id: u64,
 };

@@ -1,5 +1,6 @@
 const std = @import("std");
 const cpu = @import("cpu.zig");
+const tss = @import("tss.zig");
 
 pub const Entry = packed struct(u64) {
     limit_a: u16,
@@ -38,7 +39,9 @@ pub const selectors = .{
     .kdata_32 = 0x20,
     .kcode_64 = 0x28,
     .kdata_64 = 0x30,
+    // User code 64 bit with ring 3
     .ucode_64 = 0x38 | 0x03,
+    // User data 64 bit with ring 3
     .udata_64 = 0x40 | 0x03,
     .tss = 0x48,
 };
@@ -208,11 +211,37 @@ pub fn init() void {
     log.debug("Initializing...", .{});
     defer log.debug("Initialization complete!", .{});
 
+    const gs_base = cpu.Msr.read(.GS_BASE);
+
     gdtd = .{
         .offset = @intFromPtr(&gdt),
         .size = @sizeOf(@TypeOf(gdt)) - 1,
     };
+    cpu.lgdt(&gdtd);
 
-    log.debug("Loading GDT...", .{});
-    // const gs_base = cpu.Msr.read(.GS_BASE);
+    asm volatile (
+        \\ push %[kcode]
+        \\ lea 1f(%%rip), %%rax
+        \\ push %%rax
+        \\ lretq
+        \\ 1:
+        \\ mov %[kdata], %%eax
+        \\ mov %%eax, %%ds
+        \\ mov %%eax, %%es
+        \\ mov %%eax, %%fs
+        \\ mov %%eax, %%gs
+        \\ mov %%eax, %%ss
+        :
+        : [kcode] "i" (selectors.kcode_64),
+          [kdata] "i" (selectors.kdata_64),
+        : "rax", "rcx", "memory"
+    );
+
+    cpu.Msr.write(.GS_BASE, gs_base);
+}
+
+pub fn setTss(entry: *const tss.Entry) void {
+    gdt[9] = @bitCast(((@sizeOf(tss.Entry) - 1) & 0xffff) | ((@intFromPtr(entry) & 0xffffff) << 16) | (0b1001 << 40) | (1 << 47) | (((@intFromPtr(entry) >> 24) & 0xff) << 56));
+    gdt[10] = @bitCast(@intFromPtr(entry) >> 32);
+    cpu.ltr(selectors.tss);
 }
