@@ -5,6 +5,7 @@ const debug = @import("debug.zig");
 const uart = @import("uart.zig");
 const gdt = @import("arch/x86_64/gdt.zig");
 const idt = @import("arch/x86_64/idt.zig");
+const paging = @import("arch/x86_64/paging.zig");
 
 const log = std.log.scoped(.core);
 
@@ -36,4 +37,5 @@ pub fn init() !void {
 
     gdt.init();
     idt.init();
+    paging.init();
 }
