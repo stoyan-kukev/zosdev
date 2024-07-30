@@ -42,6 +42,9 @@ fn addKernel(b: *std.Build, options: struct { arch: Arch, optimize: std.builtin.
     const limine_zig = b.dependency("limine_zig", .{});
     kernel.root_module.addImport("limine", limine_zig.module("limine"));
 
+    const z86_64 = b.dependency("z86_64", .{});
+    kernel.root_module.addImport("z86_64", z86_64.module("z86_64"));
+
     return kernel;
 }
 

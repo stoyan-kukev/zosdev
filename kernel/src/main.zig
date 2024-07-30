@@ -1,4 +1,5 @@
 const std = @import("std");
+const z86_64 = @import("z86_64");
 const limine = @import("limine");
 const builtin = @import("builtin");
 const debug = @import("debug.zig");
@@ -34,6 +35,9 @@ export fn _start() callconv(.C) noreturn {
 
 pub fn init() !void {
     uart.init(uart.Speed.fromBaudrate(9600).?);
+
+    const vendor = z86_64.cpuid.getCpuVendor();
+    log.info("Vendor: {s}", .{vendor});
 
     gdt.init();
     idt.init();

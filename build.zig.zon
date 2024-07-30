@@ -16,6 +16,10 @@
             .url = "git+https://github.com/limine-bootloader/limine-zig#7b29b6e6f6d35052f01ed3831085a39aae131705",
             .hash = "1220f946f839eab2ec49dca1c805ce72ac3e3ef9c47b3afcdecd1c05a7b35f66d277",
         },
+        .z86_64 = .{
+            .url = "git+https://github.com/stoyan-kukev/z86_64.git#69bca51ddc76163041ad0b20f7abc29c95509d4d",
+            .hash = "122095522c5dd2f666755524fd89439d5fd1554675bfa5edeacfab35a340844b4424",
+        },
     },
 
     .paths = .{""},
