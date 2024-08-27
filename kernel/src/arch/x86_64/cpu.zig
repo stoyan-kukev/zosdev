@@ -1,21 +1,70 @@
 const gdt = @import("gdt.zig");
 const idt = @import("idt.zig");
 
-pub inline fn halt() noreturn {
-    while (true) hlt();
+pub inline fn hang() noreturn {
+    while (true) interrupts.hlt();
 }
 
-pub inline fn hlt() void {
-    asm volatile ("hlt");
-}
+pub const RFlags = packed struct(u64) {
+    cf: u1,
+    reserved_1: u1,
+    pf: u1,
+    reserved_2: u1,
+    af: u1,
+    reserved_3: u1,
+    zf: u1,
+    sf: u1,
+    tf: u1,
+    @"if": u1,
+    df: u1,
+    of: u1,
+    iopl: u2,
+    nt: u1,
+    reserved_4: u1,
+    rf: u1,
+    vm: u1,
+    ac: u1,
+    vif: u1,
+    vip: u1,
+    id: u1,
+    reserved_5: u42,
 
-pub inline fn cli() void {
-    asm volatile ("cli");
-}
+    /// Write the Flags Register
+    pub inline fn write(flags: RFlags) void {
+        asm volatile (
+            \\push %[result]
+            \\popfq
+            :
+            : [result] "{rax}" (flags),
+        );
+    }
 
-pub inline fn sti() void {
-    asm volatile ("sti");
-}
+    /// Read the Flags Register
+    pub inline fn read() RFlags {
+        return asm volatile (
+            \\pushfq
+            \\pop %[result]
+            : [result] "={rax}" (-> RFlags),
+        );
+    }
+};
+
+pub const interrupts = struct {
+    pub inline fn status() bool {
+        return RFlags.read().@"if" == 1;
+    }
+
+    pub inline fn enable() void {
+        asm volatile ("sti");
+    }
+
+    pub inline fn disable() void {
+        asm volatile ("cli");
+    }
+    pub inline fn hlt() void {
+        asm volatile ("hlt");
+    }
+};
 
 pub inline fn inb(port: u16) u8 {
     return asm volatile ("inb %[port], %[result]"

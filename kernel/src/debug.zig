@@ -1,46 +1,34 @@
 const std = @import("std");
 const uart = @import("uart.zig");
+const console = @import("console.zig");
+const Color = @import("screen.zig").Color;
 
-var last_newline: bool = false;
+const console_settings = struct {
+    const info: console.Settings = .{
+        .background = Color.black,
+        .foreground = Color.white,
+    };
 
-pub const Writer = struct {
-    prefix_len: usize,
+    const debug: console.Settings = .{
+        .background = Color.black,
+        .foreground = Color.yellow,
+    };
 
-    fn writeFn(ctx: *const anyopaque, bytes: []const u8) error{}!usize {
-        const self: *const Writer = @ptrCast(@alignCast(ctx));
+    const err: console.Settings = .{
+        .background = Color.black,
+        .foreground = Color.red,
+    };
 
-        for (bytes) |char| {
-            if (last_newline) {
-                last_newline = false;
-                for (0..self.prefix_len - 2) |_| uart.putc(' ');
-                uart.putc('|');
-                uart.putc(' ');
-            }
-
-            if (char == '\n') {
-                last_newline = true;
-            }
-
-            uart.putc(char);
-        }
-
-        return bytes.len;
-    }
-
-    pub fn any(self: *const Writer) std.io.AnyWriter {
-        return .{
-            .context = self,
-            .writeFn = writeFn,
-        };
-    }
+    const warn: console.Settings = .{
+        .background = Color.black,
+        .foreground = Color.light_red,
+    };
 };
 
 pub fn logFn(comptime level: std.log.Level, comptime scope: @Type(.EnumLiteral), comptime fmt: []const u8, args: anytype) void {
     const prefix = std.fmt.comptimePrint("[{s}] ({s}) ", .{ @tagName(level), @tagName(scope) });
 
-    var debug_writer = Writer{ .prefix_len = prefix.len };
-    const writer = debug_writer.any();
+    console.settings = @field(console_settings, @tagName(level));
 
-    last_newline = false;
-    std.fmt.format(writer, prefix ++ fmt ++ "\n", args) catch unreachable;
+    std.fmt.format(console.writer.any(), prefix ++ fmt ++ "\n", args) catch unreachable;
 }
