@@ -1,247 +1,118 @@
 const std = @import("std");
 const cpu = @import("cpu.zig");
-const tss = @import("tss.zig");
 
-pub const Entry = packed struct(u64) {
-    limit_a: u16,
-    base_a: u24,
-    access: packed struct(u8) {
-        accessed: bool = false,
-        read_write: bool,
-        direction_conforming: bool,
-        executable: bool,
-        type: enum(u1) { system, normal },
-        dpl: u2,
-        present: bool,
-    },
-    limit_b: u4,
-    flags: packed struct(u4) {
-        reserved: u1 = 0,
-        long_code: bool,
-        size: bool,
-        granularity: bool,
-    },
-    base_b: u8,
+pub var backup_kernel_stack: [16 * std.mem.page_size + 1]u8 = undefined;
+
+pub const TaskStateSegment = struct {
+    pub const Entry = packed struct(u832) {
+        reserved_1: u32 = 0,
+        rsp0: u64 = 0,
+        rsp1: u64 = 0,
+        rsp2: u64 = 0,
+        reserved_2: u64 = 0,
+        ist1: u64 = 0,
+        ist2: u64 = 0,
+        ist3: u64 = 0,
+        ist4: u64 = 0,
+        ist5: u64 = 0,
+        ist6: u64 = 0,
+        ist7: u64 = 0,
+        reserved_3: u64 = 0,
+        reserved_4: u16 = 0,
+        io_map_base: u16 = 0,
+    };
 };
 
-/// Selector (pointer) to the GDT
-pub const Gdtd = packed struct(u80) {
-    size: u16,
-    offset: u64,
+pub var tss: TaskStateSegment.Entry = .{};
+
+pub const GlobalDescriptorTable = extern struct {
+    entries: [7]Entry = .{.{}} ** 7,
+
+    pub const Entry = packed struct(u64) {
+        limit_low: u16 = 0,
+        base_low: u16 = 0,
+        base_middle: u8 = 0,
+        access: u8 = 0,
+        granularity: u8 = 0,
+        base_high: u8 = 0,
+
+        pub fn init(base: u32, limit: u32, access: u8, granularity: u8) Entry {
+            return Entry{
+                .limit_low = @truncate(limit),
+                .base_low = @truncate(base),
+                .base_middle = @truncate(base << 16),
+                .access = access,
+                .granularity = @intCast(((limit << 16) & 0x0F) | (granularity << 4)),
+                .base_high = @truncate(base << 24),
+            };
+        }
+    };
+
+    // All entries ->
+    // Base: 0, Limit: 4GB, Granularity: 4KB blocks, 32-bit protected mode
+    pub fn addKernelCodeSegment(self: *GlobalDescriptorTable) void {
+        // Access: 0x9A (Present, Ring 0, Code)
+        self.entries[1] = Entry.init(0, 0xFFFFF, 0x9A, 0xA);
+    }
+
+    pub fn addKernelDataSegment(self: *GlobalDescriptorTable) void {
+        // Access: 0x92 (Present, Ring 0, Data)
+        self.entries[2] = Entry.init(0, 0xFFFFF, 0x92, 0xC);
+    }
+
+    pub fn addUserCodeSegment(self: *GlobalDescriptorTable) void {
+        // Access: 0xFA (Present, Ring 3, Code)
+        self.entries[4] = Entry.init(0, 0xFFFFF, 0xFA, 0xA);
+    }
+
+    pub fn addUserDataSegment(self: *GlobalDescriptorTable) void {
+        // Access: 0xF2 (Present, Ring 3, Data)
+        self.entries[3] = Entry.init(0, 0xFFFFF, 0xF2, 0xC);
+    }
+
+    pub fn addTaskStateSegment(self: *GlobalDescriptorTable) void {
+        // Construct the lower 64 bits of the TSS descriptor
+        // - Limit (low 16 bits): size of TSS - 1
+        // - Base (bits 16-39): lower 24 bits of TSS address
+        // - Type and attributes (bits 40-47): 0b10001001 (TSS, present)
+        // - Base (bits 56-63): bits 24-31 of TSS address
+        self.entries[5] = @bitCast(((@sizeOf(TaskStateSegment.Entry) - 1) & 0xFFFF) | ((@intFromPtr(&tss) & 0xFFFFFF) << 16) | (0b1001 << 40) | (1 << 47) | (((@intFromPtr(&tss) >> 24) & 0xFF) << 56));
+
+        // Construct the upper 32 bits of the TSS descriptor
+        // - Base (bits 32-63): upper 32 bits of TSS address
+        self.entries[6] = @bitCast(@intFromPtr(&tss) >> 32);
+    }
+
+    pub const Register = packed struct(u80) {
+        size: u16,
+        address: u64,
+    };
+
+    pub fn register(self: *GlobalDescriptorTable) Register {
+        return Register{
+            .size = @sizeOf(GlobalDescriptorTable) - 1,
+            .address = @intFromPtr(self),
+        };
+    }
+
+    pub fn load(self: *GlobalDescriptorTable) void {
+        cpu.segments.lgdt(&self.register());
+        cpu.segments.reloadSegments();
+        cpu.segments.ltr(0x28);
+    }
 };
 
-const log = std.log.scoped(.gdt);
-
-pub const selectors = .{
-    .kcode_16 = 0x08,
-    .kdata_16 = 0x10,
-    .kcode_32 = 0x18,
-    .kdata_32 = 0x20,
-    .kcode_64 = 0x28,
-    .kdata_64 = 0x30,
-    // User code 64 bit with ring 3
-    .ucode_64 = 0x38 | 0x03,
-    // User data 64 bit with ring 3
-    .udata_64 = 0x40 | 0x03,
-    .tss = 0x48,
-};
-
-var gdt = [_]Entry{
-    @bitCast(@as(u64, 0)), // Null descriptor
-    .{
-        .limit_a = 65535,
-        .base_a = 0,
-        .access = .{
-            .read_write = true,
-            .direction_conforming = false,
-            .executable = true,
-            .type = .normal,
-            .dpl = 0,
-            .present = true,
-        },
-        .limit_b = 0,
-        .flags = .{
-            .long_code = false,
-            .size = false,
-            .granularity = false,
-        },
-        .base_b = 0,
-    },
-    .{
-        .limit_a = 65535,
-        .base_a = 0,
-        .access = .{
-            .read_write = true,
-            .direction_conforming = false,
-            .executable = false,
-            .type = .normal,
-            .dpl = 0,
-            .present = true,
-        },
-        .limit_b = 0,
-        .flags = .{
-            .long_code = false,
-            .size = false,
-            .granularity = false,
-        },
-        .base_b = 0,
-    },
-    .{
-        .limit_a = 65535,
-        .base_a = 0,
-        .access = .{
-            .read_write = true,
-            .direction_conforming = false,
-            .executable = true,
-            .type = .normal,
-            .dpl = 0,
-            .present = true,
-        },
-        .limit_b = 15,
-        .flags = .{
-            .long_code = false,
-            .size = true,
-            .granularity = true,
-        },
-        .base_b = 0,
-    },
-    .{
-        .limit_a = 65535,
-        .base_a = 0,
-        .access = .{
-            .read_write = true,
-            .direction_conforming = false,
-            .executable = false,
-            .type = .normal,
-            .dpl = 0,
-            .present = true,
-        },
-        .limit_b = 15,
-        .flags = .{
-            .long_code = false,
-            .size = true,
-            .granularity = true,
-        },
-        .base_b = 0,
-    },
-    .{
-        .limit_a = 0,
-        .base_a = 0,
-        .access = .{
-            .read_write = true,
-            .direction_conforming = false,
-            .executable = true,
-            .type = .normal,
-            .dpl = 0,
-            .present = true,
-        },
-        .limit_b = 0,
-        .flags = .{
-            .long_code = true,
-            .size = false,
-            .granularity = false,
-        },
-        .base_b = 0,
-    },
-    .{
-        .limit_a = 0,
-        .base_a = 0,
-        .access = .{
-            .read_write = true,
-            .direction_conforming = false,
-            .executable = false,
-            .type = .normal,
-            .dpl = 0,
-            .present = true,
-        },
-        .limit_b = 0,
-        .flags = .{
-            .long_code = false,
-            .size = false,
-            .granularity = false,
-        },
-        .base_b = 0,
-    },
-    .{
-        .limit_a = 0,
-        .base_a = 0,
-        .access = .{
-            .read_write = true,
-            .direction_conforming = false,
-            .executable = false,
-            .type = .normal,
-            .dpl = 3,
-            .present = true,
-        },
-        .limit_b = 0,
-        .flags = .{
-            .long_code = false,
-            .size = false,
-            .granularity = false,
-        },
-        .base_b = 0,
-    },
-    .{
-        .limit_a = 0,
-        .base_a = 0,
-        .access = .{
-            .read_write = true,
-            .direction_conforming = false,
-            .executable = true,
-            .type = .normal,
-            .dpl = 3,
-            .present = true,
-        },
-        .limit_b = 0,
-        .flags = .{
-            .long_code = true,
-            .size = false,
-            .granularity = false,
-        },
-        .base_b = 0,
-    },
-    // TSS
-    @bitCast(@as(u64, 0)),
-    @bitCast(@as(u64, 0)),
-};
-
-var gdtd: Gdtd = undefined;
+pub var gdt: GlobalDescriptorTable = .{};
 
 pub fn init() void {
-    log.debug("Initializing...", .{});
-    defer log.debug("Initialization complete!", .{});
+    tss.rsp0 = @intFromPtr(&backup_kernel_stack[backup_kernel_stack.len - 1]);
+    tss.rsp1 = @intFromPtr(&backup_kernel_stack[backup_kernel_stack.len - 1]);
 
-    const gs_base = cpu.Msr.read(.GS_BASE);
+    gdt.addKernelCodeSegment();
+    gdt.addKernelDataSegment();
+    gdt.addUserCodeSegment();
+    gdt.addUserDataSegment();
+    gdt.addTaskStateSegment();
 
-    gdtd = .{
-        .offset = @intFromPtr(&gdt),
-        .size = @sizeOf(@TypeOf(gdt)) - 1,
-    };
-    cpu.lgdt(&gdtd);
-
-    asm volatile (
-        \\ push %[kcode]
-        \\ lea 1f(%%rip), %%rax
-        \\ push %%rax
-        \\ lretq
-        \\ 1:
-        \\ mov %[kdata], %%eax
-        \\ mov %%eax, %%ds
-        \\ mov %%eax, %%es
-        \\ mov %%eax, %%fs
-        \\ mov %%eax, %%gs
-        \\ mov %%eax, %%ss
-        :
-        : [kcode] "i" (selectors.kcode_64),
-          [kdata] "i" (selectors.kdata_64),
-        : "rax", "rcx", "memory"
-    );
-
-    cpu.Msr.write(.GS_BASE, gs_base);
-}
-
-pub fn setTss(entry: *const tss.Entry) void {
-    gdt[9] = @bitCast(((@sizeOf(tss.Entry) - 1) & 0xffff) | ((@intFromPtr(entry) & 0xffffff) << 16) | (0b1001 << 40) | (1 << 47) | (((@intFromPtr(entry) >> 24) & 0xff) << 56));
-    gdt[10] = @bitCast(@intFromPtr(entry) >> 32);
-    cpu.ltr(selectors.tss);
+    gdt.load();
 }

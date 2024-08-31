@@ -29,6 +29,8 @@ pub export fn _start() noreturn {
 
     log.info("Entering stage 1 of kernel...", .{});
 
+    arch.init();
+
     while (true) {}
 }
 
