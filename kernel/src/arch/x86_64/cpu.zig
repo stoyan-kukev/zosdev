@@ -376,8 +376,18 @@ pub const ContextFrame = packed struct {
     ss: u64,
 };
 
-pub const CoreInfo = packed struct {
-    kernel_stack: u64,
-    user_stack: u64,
-    id: u64,
+pub const core = struct {
+    pub const Info = packed struct {
+        kernel_stack: u64 = undefined,
+        user_stack: u64 = undefined,
+        id: u32 = 0,
+
+        pub inline fn write(value: *Info) void {
+            return registers.ModelSpecific.write(.kernel_gs_base, @intFromPtr(value));
+        }
+
+        pub inline fn read() *Info {
+            return @ptrFromInt(registers.ModelSpecific.read(.kernel_gs_base));
+        }
+    };
 };
