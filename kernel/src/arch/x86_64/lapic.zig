@@ -41,7 +41,9 @@ pub fn init() void {
 
     lapics[core_id].base = higher_half.virtualFromPhysical(cpu.registers.ModelSpecific.read(.apic_base) & 0xFFFF_F000);
 
-    cpu.registers.ModelSpecific.write(.apic_base, cpu.registers.ModelSpecific.read(.apic_base) | (@as(u64, 1) << 11));
+    const @"11th_bit": u64 = 1 << 11;
+    const lapic_enabled_value = cpu.registers.ModelSpecific.read(.apic_base) | @"11th_bit";
+    cpu.registers.ModelSpecific.write(.apic_base, lapic_enabled_value);
 
     lapics[core_id].write(.timer_init, 0);
 }

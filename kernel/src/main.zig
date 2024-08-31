@@ -6,6 +6,7 @@ const debug = @import("debug.zig");
 const arch = @import("arch.zig");
 const screen = @import("screen.zig");
 const console = @import("console.zig");
+const smp = @import("smp.zig");
 
 const log = std.log.scoped(.core);
 
@@ -28,10 +29,17 @@ pub export fn _start() noreturn {
     console.init();
 
     log.info("Entering stage 1 of kernel...", .{});
-
-    arch.init();
+    smp.init(&stage1);
 
     while (true) {}
+}
+
+var stage1_done = false;
+
+fn stage1() noreturn {
+    log.info("STARTING STAGE 1", .{});
+
+    unreachable;
 }
 
 pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
